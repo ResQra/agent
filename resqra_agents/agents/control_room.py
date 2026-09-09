@@ -11,11 +11,11 @@ from __future__ import annotations
 import copy
 
 from resqra_agents.agents.monitor import WatchAgent
-from resqra_agents.agents.priority import PriorityAgent
 from resqra_agents.agents.report_intake import ReportIntakeAgent
 from resqra_agents.agents.resident import ResidentAgent
-from resqra_agents.agents.team_dispatch import TeamDispatchAgent
 from resqra_agents.tools.activity_log import ActivityLog
+from resqra_agents.tools.allocation_engine import recommend_team as allocate_team
+from resqra_agents.tools.priority_engine import compute_priority
 from resqra_agents.tools.mission_store import MissionStore
 from resqra_agents.tools.pending_actions import (
     APPROVED,
@@ -32,8 +32,6 @@ class ControlRoomAgent:
     def __init__(
         self,
         intake_agent: ReportIntakeAgent | None = None,
-        priority_agent: PriorityAgent | None = None,
-        dispatch_agent: TeamDispatchAgent | None = None,
         resident_agent: ResidentAgent | None = None,
         watch_agent: WatchAgent | None = None,
         pending_actions: PendingActionsStore | None = None,
@@ -42,18 +40,31 @@ class ControlRoomAgent:
         rejection_memory: RejectionMemory | None = None,
     ) -> None:
         self.intake_agent = intake_agent or ReportIntakeAgent()
-        self.priority_agent = priority_agent or PriorityAgent()
-        self.dispatch_agent = dispatch_agent or TeamDispatchAgent()
         self.resident_agent = resident_agent or ResidentAgent()
         self.pending_actions = pending_actions or PendingActionsStore()
         self.rejection_memory = rejection_memory or RejectionMemory()
         self.missions = missions or MissionStore()
         self.activity = activity_log or ActivityLog()
         self.watch_agent = watch_agent or WatchAgent(
-            dispatch_agent=self.dispatch_agent,
+            recommend_fn=self.recommend_team,
             pending_actions=self.pending_actions,
             rejection_memory=self.rejection_memory,
             activity_log=self.activity,
+        )
+
+    def recommend_team(
+        self,
+        incident: dict,
+        teams: list[dict],
+        rejected_pairs: set | None = None,
+        route_check=None,
+        shelters: list | None = None,
+    ) -> dict:
+        """Deterministic allocation engine, called directly (no agent
+        costume — ranking teams needs no judgment)."""
+        return allocate_team(
+            incident, teams, rejected_pairs=rejected_pairs,
+            route_check=route_check, shelters=shelters,
         )
 
     def dispatch(self, task: dict) -> dict:
@@ -62,12 +73,13 @@ class ControlRoomAgent:
             return self.handle_new_distress_msg(task)
         if task_type == "score_incident":
             return {
-                "routed_to": "PriorityAgent",
-                "result": self.priority_agent.score(
+                "routed_to": "priority_engine",
+                "result": compute_priority(
                     task.get("incident") or {},
                     area=task.get("area"),
                     weather=task.get("weather"),
                     now=task.get("now"),
+                    shelters=task.get("shelters"),
                 ),
             }
         if task_type == "recommend_team":
@@ -98,6 +110,22 @@ class ControlRoomAgent:
                 "routed_to": "ControlRoomAgent",
                 "result": {"cards": self.pending_actions.list_pending()},
             }
+        if task_type == "intake_extract":
+            from resqra_agents.agents.report_intake import extract as intake_extract_fn
+
+            out = intake_extract_fn(str(task.get("raw_text") or ""))
+            return {
+                "routed_to": "ReportIntakeAgent",
+                "result": {
+                    "people": out.get("people_count"),
+                    "vulnerabilities": out.get("vulnerabilities") or [],
+                    "urgency": out.get("urgency")
+                    if out.get("urgency") != "UNKNOWN"
+                    else None,
+                    "water_rising": bool(out.get("water_rising")),
+                    "location_text": out.get("location_text"),
+                },
+            }
         raise ValueError(f"unknown control-room task type: {task_type!r}")
 
     def handle_new_distress_msg(self, task: dict) -> dict:
@@ -106,7 +134,7 @@ class ControlRoomAgent:
             raise ValueError("new_distress_msg requires raw_text")
 
         incident = self.intake_agent.process(raw_text, source=task.get("source", "demo"))
-        priority = self.priority_agent.score(
+        priority = compute_priority(
             incident,
             area=task.get("area"),
             weather=task.get("weather"),
@@ -118,7 +146,7 @@ class ControlRoomAgent:
         pending_card = None
         teams = task.get("teams") or []
         if teams:
-            recommendation = self.dispatch_agent.recommend(
+            recommendation = self.recommend_team(
                 incident,
                 teams,
                 rejected_pairs=self._rejected_pairs(),
@@ -147,14 +175,15 @@ class ControlRoomAgent:
     def handle_recommend_team(self, task: dict) -> dict:
         incident = task.get("incident") or {}
         teams = task.get("teams") or []
-        recommendation = self.dispatch_agent.recommend(
+        recommendation = self.recommend_team(
             incident,
             teams,
             rejected_pairs=task.get("rejected_pairs") or self._rejected_pairs(),
+            shelters=task.get("shelters"),
         )
         pending_card = self.create_assignment_card(incident, teams, recommendation)
         return {
-            "routed_to": "TeamDispatchAgent",
+            "routed_to": "allocation_engine",
             "result": {
                 "recommendation": recommendation,
                 "pending_action": pending_card,

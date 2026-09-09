@@ -292,9 +292,18 @@ def extract(raw_text: str) -> dict:
     if llm_result is not None:
         result = normalize_extraction(llm_result)
         result["_source"] = "llm"
-        return result
-    result = normalize_extraction(regex_extract(raw_text))
-    result["_source"] = "regex"
+    else:
+        result = normalize_extraction(regex_extract(raw_text))
+        result["_source"] = "regex"
+    # Intake's jurisdiction focus: obvious out-of-area text is flagged here
+    # so downstream stages can drop it before spending network/compute.
+    try:
+        from resqra_agents.tools.geo import jurisdiction_hint_from_text
+
+        result["jurisdiction_hint"] = jurisdiction_hint_from_text(
+            f"{raw_text} {result.get('location_text') or ''}")
+    except Exception:
+        result["jurisdiction_hint"] = "UNKNOWN"
     return result
 
 

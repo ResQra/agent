@@ -6,17 +6,17 @@ Architecture Alignment:
 - ResidentAgent: Conversational LLM + Live Profile Updates (F19)
 - MonitorAgent (WatchAgent): Geohash Hotspot Clustering + Replanning Sweeps
 
-Deterministic Tools (Pure Python, No LLM):
-- priority_engine: Deterministic F03 priority scoring tool
-- allocation_engine: Deterministic team ranking & RejectionMemory tool
+Deterministic Engines (Pure Python, No LLM — called directly, no agents):
+- priority_engine: Deterministic F03 priority scoring
+- allocation_engine: Deterministic team ranking & RejectionMemory
+- routing services: Deterministic NetworkX candidates + explanations
+- comms service: Simulated team contact + timeout detection
 """
 
 from resqra_agents.agents.control_room import ControlRoomAgent
 from resqra_agents.agents.monitor import MonitorAgent, WatchAgent
-from resqra_agents.agents.priority import PriorityAgent
 from resqra_agents.agents.report_intake import ReportIntakeAgent
 from resqra_agents.agents.resident import ResidentAgent
-from resqra_agents.agents.team_dispatch import TeamDispatchAgent
 
 # Standard aliases matching AGENT_ARCHITECTURES.md
 Supervisor = ControlRoomAgent
@@ -30,7 +30,5 @@ __all__ = [
     "ResidentAgent",
     "MonitorAgent",
     "WatchAgent",
-    "PriorityAgent",
-    "TeamDispatchAgent",
 ]
 

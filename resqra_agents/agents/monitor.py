@@ -27,13 +27,14 @@ class WatchAgent:
 
     def __init__(
         self,
-        dispatch_agent=None,
+        recommend_fn=None,
         pending_actions=None,
         rejection_memory=None,
         activity_log=None,
     ) -> None:
         # Optional collaborators; sweep still works without them (findings only).
-        self.dispatch_agent = dispatch_agent
+        # recommend_fn(incident, teams, rejected_pairs) -> recommendation dict.
+        self.recommend_fn = recommend_fn
         self.pending_actions = pending_actions
         self.rejection_memory = rejection_memory
         self.activity_log = activity_log
@@ -48,23 +49,32 @@ class WatchAgent:
         current = now if now is not None else time.time()
         open_incidents = [i for i in incidents or [] if i.get("status") in OPEN_STATUSES]
 
+        def _sint(v, d=0):
+            try:
+                return int(v if v is not None else d)
+            except (TypeError, ValueError):
+                return d
+
         available_capacity = sum(
-            int(t.get("capacity") or 0)
+            _sint(t.get("capacity"))
             for t in teams or []
             if str(t.get("status") or "").upper() == "AVAILABLE"
         )
-        demand_people = sum(int(i.get("people") or 1) for i in open_incidents)
+        demand_people = sum(_sint(i.get("people"), 1) for i in open_incidents)
 
         hotspots = self.find_hotspots(open_incidents)
-        delayed = [
-            {
-                "incident_id": i.get("id"),
-                "unresolved_min": int((current - float(i.get("created_at") or current)) // 60),
-                "action": "bump+notify",
-            }
-            for i in open_incidents
-            if current - float(i.get("created_at") or current) >= DELAY_THRESHOLD_MIN * 60
-        ]
+        delayed = []
+        for i in open_incidents:
+            try:
+                age_min = (current - float(i.get("created_at") or current)) // 60
+            except (TypeError, ValueError):
+                continue
+            if age_min >= DELAY_THRESHOLD_MIN:
+                delayed.append({
+                    "incident_id": i.get("id"),
+                    "unresolved_min": int(age_min),
+                    "action": "bump+notify",
+                })
         unassigned_needing_team = [
             i.get("id")
             for i in open_incidents
@@ -148,7 +158,7 @@ class WatchAgent:
         Skips duplicates: an identical PENDING proposal for the same
         incident+team is never created twice. Rejection memory is honored.
         """
-        if not (self.dispatch_agent and self.pending_actions):
+        if not (self.recommend_fn and self.pending_actions):
             return []
 
         rejected = self.rejection_memory.pairs() if self.rejection_memory else set()
@@ -160,7 +170,7 @@ class WatchAgent:
             incident = by_id.get(incident_id)
             if incident is None:
                 continue
-            recommendation = self.dispatch_agent.recommend(
+            recommendation = self.recommend_fn(
                 incident, teams, rejected_pairs=rejected
             )
             team_id = recommendation.get("team_id")

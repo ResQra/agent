@@ -80,7 +80,21 @@ def compute_priority(
     area: dict | None = None,
     weather: dict | None = None,
     now: float | None = None,
+    shelters: list | None = None,
 ) -> dict:
+    # Jurisdiction guard: outside the operational district this is not a
+    # rescue-queue emergency. Score 0 with the reason on record instead of
+    # letting spam compete with real district SOS.
+    if (incident or {}).get("out_of_area"):
+        return {
+            "score": 0,
+            "band": "LOW",
+            "factors": [{"name": "jurisdiction", "points": 0,
+                         "reason": "outside operational district (Rautahat) — "
+                                   "routed to review, not the rescue queue"}],
+            "reasons": ["outside operational district (Rautahat) — "
+                        "routed to review, not the rescue queue"],
+        }
     extracted = _incident_factors(incident or {})
     factors: list[dict] = []
 
@@ -128,7 +142,21 @@ def compute_priority(
     points = RIVER_POINTS[river_risk]
     add("river_risk", points, f"river risk {river_risk} (+{points})")
 
-    score = sum(f["points"] for f in factors)
+    # Shelter safety perimeter: an SOS from inside an open shelter with
+    # free beds and staff on site is still real, but a boat is rarely the
+    # first answer — shelter coordination is. Full shelters give no relief.
+    from resqra_agents.tools.geo import nearest_open_shelter
+
+    refuge = nearest_open_shelter((incident or {}).get("location"), shelters)
+    if refuge:
+        s = refuge["shelter"]
+        add("shelter_proximity", -2,
+            f"inside {s.get('name')} safety perimeter "
+            f"({refuge['distance_m']:.0f}m, {refuge['free']} free beds, staff on site) (-2)")
+    else:
+        add("shelter_proximity", 0, "not inside an open shelter perimeter (+0)")
+
+    score = max(0, sum(f["points"] for f in factors))
     band = "LOW"
     for band_name, threshold in PRIORITY_BANDS:
         if score >= threshold:

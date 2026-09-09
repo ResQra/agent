@@ -81,7 +81,7 @@ class ResQraMainAgent:
             "incident": incident,
             "teams": teams,
             "rejected_pairs": rejected_pairs,
-        })["result"]
+        })["result"]["recommendation"]
 
     def decide_approval(
         self,

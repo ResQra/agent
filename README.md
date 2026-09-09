@@ -242,8 +242,8 @@ flowchart TB
     INPUT["Task input<br/>SOS text, chat, approval, monitor tick"]
     CTRL["ControlRoomAgent<br/>main router"]
     INTAKE["ReportIntakeAgent<br/>SOS text -> structured incident"]
-    PRIORITY["PriorityAgent<br/>calls priority_engine"]
-    DISPATCH["TeamDispatchAgent<br/>calls allocation_engine"]
+    PRIORITY["priority_engine<br/>deterministic scoring (no agent)"]
+    DISPATCH["allocation_engine<br/>deterministic ranking (no agent)"]
     OUTPUT["Agent response<br/>incident + score + recommendation"]
 
     INPUT --> CTRL
@@ -278,12 +278,9 @@ flowchart TB
 
     CTRL --> HELP["ResidentHelpAgent"]
     CTRL --> INTAKE["ReportIntakeAgent"]
-    CTRL --> PRIORITY["PriorityAgent"]
-    CTRL --> DISPATCH["TeamDispatchAgent"]
+    CTRL --> PRIORITY["priority_engine<br/>pure Python (no agent)"]
+    CTRL --> DISPATCH["allocation_engine<br/>pure Python (no agent)"]
     CTRL --> WATCH["WatchAgent"]
-
-    PRIORITY --> PT["priority_engine<br/>pure Python"]
-    DISPATCH --> AT["allocation_engine<br/>pure Python"]
 
     WATCH --> HOT["hotspot detection"]
     WATCH --> DELAY["delay escalation"]
@@ -292,14 +289,14 @@ flowchart TB
     HELP --> CHAT["resident chat + profile updates"]
 ```
 
-Keep the agent names plain:
+Keep the agent names plain (deterministic steps are engines, not agents):
 
-| Agent | Meaning |
+| Agent / Engine | Meaning |
 |---|---|
 | `ControlRoomAgent` | Main router and approval enforcer |
 | `ReportIntakeAgent` | Reads SOS text and extracts structured data |
-| `PriorityAgent` | Scores incidents through deterministic code |
-| `TeamDispatchAgent` | Recommends teams through deterministic code |
+| `priority_engine` | Scores incidents through deterministic code (engine) |
+| `allocation_engine` | Recommends teams through deterministic code (engine) |
 | `ResidentHelpAgent` | Chats with residents and updates profile facts |
 | `WatchAgent` | Monitors hotspots, delays, failures, and replans |
 
@@ -424,7 +421,7 @@ Why second:
 - priority needs structured fields
 - dispatch needs people count and location
 
-### Step 3: Wrap `PriorityAgent`
+### Step 3: Call `priority_engine` directly
 
 Goal:
 
@@ -432,13 +429,9 @@ Goal:
 structured incident -> priority score
 ```
 
-This is mostly a wrapper around `priority_engine.py`.
+No wrapper agent — ranking math needs no judgment (see `tools/priority_engine.py`).
 
-Why:
-
-- lets the architecture say "agent" while keeping math deterministic
-
-### Step 4: Wrap `TeamDispatchAgent`
+### Step 4: Call `allocation_engine` directly
 
 Goal:
 
@@ -446,12 +439,8 @@ Goal:
 incident + teams -> recommended team + reasons
 ```
 
-This is mostly a wrapper around `allocation_engine.py`.
-
-Why:
-
-- gives the coordinator a useful recommendation
-- later it will create `PendingActions`
+No wrapper agent — `tools/allocation_engine.py` plus coordinator approval
+gives the recommendation; tradeoff judgment lives in the debate chamber.
 
 ### Step 5: One End-To-End Local Demo
 
@@ -490,8 +479,8 @@ Deploy only after these are true:
 
 - `ControlRoomAgent` exists.
 - `ReportIntakeAgent` exists.
-- `PriorityAgent` works.
-- `TeamDispatchAgent` works.
+- `priority_engine` works.
+- `allocation_engine` works.
 - A local demo proves SOS text to recommendation.
 - There is at least one smoke test that passes without cloud.
 - There is one optional LLM test with Groq.
@@ -626,8 +615,8 @@ WatchAgent sweep (replan) -> auto-created approval cards
 
 The backend already integrates this brain in dev mode through
 `backend/app/agents_gateway/gateway.py`: new incidents are scored by the
-PriorityAgent on creation, `/api/ops/incidents/{id}/recommend` delegates to
-TeamDispatchAgent, and rejected pending actions are honored. After the agent
+priority engine on creation, `/api/ops/incidents/{id}/recommend` delegates to
+the allocation engine, and rejected pending actions are honored. After the agent
 is deployed, set `resqra_agent_url` in the backend `.env` and the same seams
 call the deployed runtime instead.
 
